@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  api:
+    build: .
+    ports:
+      - 3000:3000
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://main:main@postgres/main
+      DATABASE_CONNECTION_POOL_SIZE: 5
+      RUST_LOG: info
+
+  postgres:
+    image: postgres:15
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: main
+      POSTGRES_PASSWORD: main
+      POSTGRES_DB: main
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/data/postgres
+
+volumes:
+  postgres-data:

@@ -1,0 +1,25 @@
+---
+concurrency: 32
+base: "http://localhost:3000"
+iterations: 100000
+
+plan:
+  - name: Fetch state
+    request:
+      url: /api/v1/order-book
+
+  - name: Post buy
+    request:
+      url: /api/v1/order-book/buy
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body: '{ "quantity": 5, "price": 2  }'
+
+  - name: Post sell
+    request:
+      url: /api/v1/order-book/sell
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body: '{ "quantity": 5, "price": 2  }'
