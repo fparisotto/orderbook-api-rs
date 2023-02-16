@@ -1,7 +1,7 @@
 use axum::Extension;
 use axum::Router;
 use orderbook_api_rs::actor;
-// use orderbook_api_rs::database;
+use orderbook_api_rs::database;
 use orderbook_api_rs::endpoints;
 use orderbook_api_rs::AppContext;
 use orderbook_api_rs::Config;
@@ -19,13 +19,13 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::parse()?;
 
-    // let db = database::connect(&config).await?;
-    // database::run_migrations(&db).await?;
+    let db = database::connect(&config).await?;
+    database::run_migrations(&db).await?;
 
-    let (client, actor) = actor::build("vibranium", 8);
+    let (client, actor) = actor::build(db.clone(), "vibranium", 8);
 
     let app_state = AppContext {
-        // db,
+        db,
         config: Arc::new(config),
         actor_client: client,
     };
@@ -36,11 +36,11 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http());
 
     let address = SocketAddr::from(([0, 0, 0, 0], 3000));
-    tracing::info!("Server running, listening on {}", address);
     let http_server = axum::Server::bind(&address)
         .serve(app.into_make_service())
         .with_graceful_shutdown(shutdown_signal());
 
+    tracing::info!("Server running, listening on {}", address);
     tokio::select! {
         _ = actor.run() => {},
         _ = http_server => {},

@@ -1,4 +1,5 @@
 use crate::{
+    database,
     order_book::{Event, OrderBookState},
     AppContext, Error, Result,
 };
@@ -7,32 +8,66 @@ use axum::{
     debug_handler, extract::Path, http::StatusCode, response::IntoResponse, response::Response,
     routing::get, routing::patch, routing::post, Extension, Json, Router,
 };
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Internal Server Error: {}", self.0),
-        )
-            .into_response()
+#[derive(serde::Serialize)]
+struct ErrorPayload {
+    ts: DateTime<Utc>,
+    reason: String,
+}
+
+fn status_code(error: &Error) -> StatusCode {
+    match error {
+        Error::EventRejection { .. } => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
-async fn health_check() -> String {
-    // TODO check database connectivity
-    "OK".to_string()
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        match self {
+            Self::EventRejection { ts, reason } => {
+                let t = (StatusCode::BAD_REQUEST, Json(ErrorPayload { ts, reason }));
+                return t.into_response();
+            }
+            Self::ApplicationError { reason } => {
+                let t = (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorPayload {
+                        ts: Utc::now(),
+                        reason,
+                    }),
+                );
+                return t.into_response();
+            }
+            Self::Database(ref e) => {
+                tracing::error!("Database error: {:?}", e);
+            }
+            Self::Anyhow(ref e) => {
+                tracing::error!("Generic error: {:?}", e);
+            }
+
+            _ => (),
+        }
+        (status_code(&self), self.to_string()).into_response()
+    }
+}
+
+async fn health_check(Extension(app_context): Extension<AppContext>) -> Result<Json<String>> {
+    database::run_health_check(&app_context.db).await?;
+    Ok(Json("OK".to_string()))
 }
 
 pub fn routes() -> Router {
-    Router::new()
-        .route("/health-check", get(health_check))
-        .merge(routes_v1())
+    let health_check_router = Router::new().route("/health-check", get(health_check));
+    Router::new().nest("/api", health_check_router.merge(routes_v1()))
 }
 
 fn routes_v1() -> Router {
-    Router::new().nest("/api/v1", order_book_routes())
+    Router::new().nest("/v1", order_book_routes())
 }
 
 fn order_book_routes() -> Router {
@@ -62,7 +97,7 @@ struct EventsResponse {
 #[derive(Deserialize)]
 struct OrderRequest {
     quantity: u32,
-    price: u32,
+    price: Decimal,
 }
 
 #[debug_handler()]

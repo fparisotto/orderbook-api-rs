@@ -20,9 +20,11 @@ services:
       POSTGRES_USER: main
       POSTGRES_PASSWORD: main
       POSTGRES_DB: main
+      POSTGRES_FSYNC: "off"
     restart: unless-stopped
+    command: -c fsync=off -c synchronous_commit=off -c full_page_writes=off
     volumes:
-      - postgres-data:/data/postgres
+      - postgres-data:/var/lib/postgresql
 
 volumes:
   postgres-data:

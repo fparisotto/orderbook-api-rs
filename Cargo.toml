@@ -14,8 +14,10 @@ thiserror = "1.0.38"
 uuid = { version = "1.3.0", features = ["serde", "v4"] }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.6.6", features = ["macros"] }
-sqlx = { version = "0.6.2", features = ["postgres", "runtime-tokio-rustls", "migrate", "uuid", "chrono", "json"] }
+sqlx = { version = "0.6.2", features = ["postgres", "runtime-tokio-rustls", "migrate", "uuid", "chrono", "json", "decimal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower = "0.4.11"
 tower-http = { version = "0.2.0", features = ["trace"] }
+rust_decimal = { version = "1.28.1", features = ["serde-float", "db-postgres", "db-tokio-postgres", "serde-with-float"] }
+rust_decimal_macros = "1.28.1"

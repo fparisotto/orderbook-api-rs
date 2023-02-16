@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -12,11 +13,11 @@ use uuid::Uuid;
 pub enum Command {
     Buy {
         quantity: u32,
-        price: u32, // FIXME
+        price: Decimal,
     },
     Sell {
         quantity: u32,
-        price: u32, // FIXME
+        price: Decimal,
     },
     Cancel {
         id: Uuid,
@@ -24,7 +25,7 @@ pub enum Command {
     Update {
         id: Uuid,
         new_quantity: u32,
-        new_price: u32, // FIXME
+        new_price: Decimal,
     },
     GetState,
 }
@@ -33,16 +34,16 @@ pub enum Command {
 pub enum Event {
     Filled {
         ts: DateTime<Utc>,
-        price: u32,
-        quantity: u32,
-        orders: Vec<Uuid>,
+        order: Order,
+        counterpart: Order,
     },
     Accepted {
+        ts: DateTime<Utc>,
         order: Order,
     },
     Canceled {
         ts: DateTime<Utc>,
-        order: Uuid,
+        order: Order,
     },
     Rejected {
         ts: DateTime<Utc>,
@@ -61,11 +62,11 @@ pub enum OrderType {
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Order {
-    order_type: OrderType,
-    id: Uuid,
-    ts: DateTime<Utc>,
-    quantity: u32,
-    price: u32, // FIXME
+    pub order_type: OrderType,
+    pub id: Uuid,
+    pub ts: DateTime<Utc>,
+    pub quantity: u32,
+    pub price: Decimal,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize, Deserialize)]
@@ -74,21 +75,40 @@ pub struct OrderBookState {
     pub sell: Vec<Order>,
 }
 
-impl Order {
-    pub fn sell(quantity: u32, price: u32) -> Self {
+impl OrderBookState {
+    fn new(order_book: &OrderBook) -> Self {
         Self {
-            order_type: OrderType::Sell,
+            buy: order_book
+                .buy_book
+                .clone()
+                .into_iter()
+                .map(|rc| (*rc).clone())
+                .collect(),
+            sell: order_book
+                .sell_book
+                .clone()
+                .into_iter()
+                .map(|rc| (*rc).clone())
+                .collect(),
+        }
+    }
+}
+
+impl Order {
+    pub fn sell(ts: DateTime<Utc>, quantity: u32, price: Decimal) -> Self {
+        Self {
             id: Uuid::new_v4(),
-            ts: Utc::now(),
+            order_type: OrderType::Sell,
+            ts,
             quantity,
             price,
         }
     }
-    pub fn buy(quantity: u32, price: u32) -> Self {
+    pub fn buy(ts: DateTime<Utc>, quantity: u32, price: Decimal) -> Self {
         Self {
-            order_type: OrderType::Buy,
             id: Uuid::new_v4(),
-            ts: Utc::now(),
+            order_type: OrderType::Buy,
+            ts,
             quantity,
             price,
         }
@@ -135,7 +155,7 @@ impl PartialOrd for Order {
 #[derive(Debug)]
 pub struct OrderBook {
     pub ticker: String,
-    version: u128,
+    ts: DateTime<Utc>,
     sell_book: BTreeSet<Rc<Order>>,
     sell_index: HashMap<Uuid, Rc<Order>>,
     buy_book: BTreeSet<Rc<Order>>,
@@ -145,7 +165,7 @@ pub struct OrderBook {
 impl OrderBook {
     pub fn new(ticker: &str) -> Self {
         OrderBook {
-            version: 0,
+            ts: Utc::now(),
             ticker: ticker.to_owned(),
             sell_book: BTreeSet::new(),
             sell_index: HashMap::new(),
@@ -155,46 +175,45 @@ impl OrderBook {
     }
 
     pub fn process(&mut self, command: Command) -> Vec<Event> {
-        self.version += 1;
+        let ts = Utc::now();
         match command {
             Command::Buy { quantity, price } => {
                 let mut events = vec![];
-                self.process_buy_order(&mut events, Order::buy(quantity, price));
+                self.process_buy_order(ts, &mut events, Order::buy(ts, quantity, price));
+                self.ts = ts;
                 events
             }
             Command::Sell { quantity, price } => {
                 let mut events = vec![];
-                self.process_sell_order(&mut events, Order::sell(quantity, price));
+                self.process_sell_order(ts, &mut events, Order::sell(ts, quantity, price));
+                self.ts = ts;
                 events
             }
-            Command::Cancel { id } => self.process_cancel_order(&id),
+            Command::Cancel { id } => {
+                let events = self.process_cancel_order(ts, id);
+                self.ts = ts;
+                events
+            }
             Command::Update {
                 id,
                 new_quantity,
                 new_price,
-            } => self.process_update_order(&id, new_quantity, new_price),
+            } => {
+                let events = self.process_update_order(ts, id, new_quantity, new_price);
+                self.ts = ts;
+                events
+            }
             Command::GetState => {
-                let buy = self
-                    .buy_book
-                    .clone()
-                    .into_iter()
-                    .map(|rc| (*rc).clone())
-                    .collect();
-                let sell = self
-                    .sell_book
-                    .clone()
-                    .into_iter()
-                    .map(|rc| (*rc).clone())
-                    .collect();
                 vec![Event::State {
-                    state: OrderBookState { buy, sell },
+                    state: OrderBookState::new(self),
                 }]
             }
         }
     }
 
-    fn process_sell_order(&mut self, events: &mut Vec<Event>, order: Order) {
+    fn process_sell_order(&mut self, ts: DateTime<Utc>, events: &mut Vec<Event>, order: Order) {
         OrderBook::process_order(
+            ts,
             events,
             order,
             &mut self.buy_book,
@@ -204,8 +223,9 @@ impl OrderBook {
         )
     }
 
-    fn process_buy_order(&mut self, events: &mut Vec<Event>, order: Order) {
+    fn process_buy_order(&mut self, ts: DateTime<Utc>, events: &mut Vec<Event>, order: Order) {
         OrderBook::process_order(
+            ts,
             events,
             order,
             &mut self.sell_book,
@@ -216,6 +236,7 @@ impl OrderBook {
     }
 
     fn process_order(
+        ts: DateTime<Utc>,
         events: &mut Vec<Event>,
         order: Order,
         counterpart_book: &mut BTreeSet<Rc<Order>>,
@@ -224,24 +245,23 @@ impl OrderBook {
         source_index: &mut HashMap<Uuid, Rc<Order>>,
     ) {
         match counterpart_book.pop_first() {
-            Some(counterpart_order) if order.price <= counterpart_order.price => {
-                match order.quantity.cmp(&counterpart_order.quantity) {
+            Some(counterpart) if order.price <= counterpart.price => {
+                match order.quantity.cmp(&counterpart.quantity) {
                     Ordering::Less => {
-                        let new_counterpart_order = Order {
-                            order_type: counterpart_order.order_type,
-                            id: counterpart_order.id,
-                            ts: counterpart_order.ts,
-                            price: counterpart_order.price,
-                            quantity: counterpart_order.quantity - order.quantity,
+                        let new_counterpart = Order {
+                            order_type: counterpart.order_type,
+                            id: counterpart.id,
+                            ts: counterpart.ts,
+                            price: counterpart.price,
+                            quantity: counterpart.quantity - order.quantity,
                         };
-                        let rc = Rc::new(new_counterpart_order);
+                        let rc = Rc::new(new_counterpart);
                         counterpart_book.insert(rc.clone());
                         counterpart_index.insert(rc.id, rc);
                         events.push(Event::Filled {
-                            ts: Utc::now(),
-                            price: order.price,
-                            quantity: order.quantity,
-                            orders: vec![order.id, counterpart_order.id],
+                            ts,
+                            order: order.clone(),
+                            counterpart: counterpart.as_ref().clone(),
                         });
                     }
                     Ordering::Greater => {
@@ -252,9 +272,10 @@ impl OrderBook {
                             id: order.id,
                             ts: order.ts,
                             price: order.price,
-                            quantity: order.quantity - counterpart_order.quantity,
+                            quantity: order.quantity - counterpart.quantity,
                         };
                         OrderBook::process_order(
+                            ts,
                             events,
                             new_source_order,
                             counterpart_book,
@@ -264,15 +285,15 @@ impl OrderBook {
                         )
                     }
                     Ordering::Equal => events.push(Event::Filled {
-                        ts: Utc::now(),
-                        price: order.price,
-                        quantity: order.quantity,
-                        orders: vec![order.id, counterpart_order.id],
+                        ts,
+                        order: order.clone(),
+                        counterpart: counterpart.as_ref().clone(),
                     }),
                 }
             }
             _ => {
                 events.push(Event::Accepted {
+                    ts,
                     order: order.clone(),
                 });
                 let rc = Rc::new(order);
@@ -282,26 +303,22 @@ impl OrderBook {
         }
     }
 
-    fn process_cancel_order(&mut self, id: &Uuid) -> Vec<Event> {
-        match (self.sell_index.get(id), self.buy_index.get(id)) {
+    fn process_cancel_order(&mut self, ts: DateTime<Utc>, id: Uuid) -> Vec<Event> {
+        match (self.sell_index.get(&id), self.buy_index.get(&id)) {
             (Some(sell_order), None) => {
+                let order: Order = sell_order.as_ref().clone();
                 self.sell_book.remove(sell_order);
-                self.sell_index.remove(id);
-                vec![Event::Canceled {
-                    ts: Utc::now(),
-                    order: id.to_owned(),
-                }]
+                self.sell_index.remove(&id);
+                vec![Event::Canceled { ts, order }]
             }
             (None, Some(buy_order)) => {
+                let order: Order = buy_order.as_ref().clone();
                 self.buy_book.remove(buy_order);
-                self.buy_index.remove(id);
-                vec![Event::Canceled {
-                    ts: Utc::now(),
-                    order: id.to_owned(),
-                }]
+                self.buy_index.remove(&id);
+                vec![Event::Canceled { ts, order }]
             }
             (None, None) => vec![Event::Rejected {
-                ts: Utc::now(),
+                ts,
                 reason: format!("Order {} not found in sell or buy side", id),
             }],
             (Some(_), Some(_)) => {
@@ -310,16 +327,22 @@ impl OrderBook {
         }
     }
 
-    fn process_update_order(&mut self, id: &Uuid, new_quantity: u32, new_price: u32) -> Vec<Event> {
-        match (self.sell_index.get(id), self.buy_index.get(id)) {
+    fn process_update_order(
+        &mut self,
+        ts: DateTime<Utc>,
+        id: Uuid,
+        new_quantity: u32,
+        new_price: Decimal,
+    ) -> Vec<Event> {
+        match (self.sell_index.get(&id), self.buy_index.get(&id)) {
             (Some(_), None) => {
-                let mut events = self.process_cancel_order(id);
-                self.process_sell_order(&mut events, Order::sell(new_quantity, new_price));
+                let mut events = self.process_cancel_order(ts, id);
+                self.process_sell_order(ts, &mut events, Order::sell(ts, new_quantity, new_price));
                 events
             }
             (None, Some(_)) => {
-                let mut events = self.process_cancel_order(id);
-                self.process_buy_order(&mut events, Order::buy(new_quantity, new_price));
+                let mut events = self.process_cancel_order(ts, id);
+                self.process_buy_order(ts, &mut events, Order::buy(ts, new_quantity, new_price));
                 events
             }
             (None, None) => vec![Event::Rejected {
@@ -336,18 +359,22 @@ impl OrderBook {
 #[cfg(test)]
 mod tests {
 
+    use chrono::Duration;
+    use rust_decimal_macros::dec;
+
     use super::*;
 
     #[test]
     fn test_order_compare_on_same_price() {
+        let ts = Utc::now();
         {
-            let order1 = Order::buy(10, 1);
-            let order2 = Order::buy(10, 1);
+            let order1 = Order::buy(ts, 10, dec!(1));
+            let order2 = Order::buy(ts + Duration::milliseconds(1), 10, dec!(1));
             assert_eq!(order1.cmp(&order2), Ordering::Less);
         }
         {
-            let order1 = Order::sell(10, 1);
-            let order2 = Order::sell(10, 1);
+            let order1 = Order::sell(ts, 10, dec!(1));
+            let order2 = Order::sell(ts + Duration::milliseconds(1), 10, dec!(1));
             assert_eq!(order1.cmp(&order2), Ordering::Less);
         }
     }
@@ -357,51 +384,49 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Buy {
             quantity: 10,
-            price: 3,
+            price: dec!(3),
         });
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events.first().unwrap(),
-            Event::Accepted { order: _ }
+            Event::Accepted { ts: _, order: _ }
         ));
 
         let events = order_book.process(Command::Buy {
             quantity: 10,
-            price: 3,
+            price: dec!(3),
         });
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events.first().unwrap(),
-            Event::Accepted { order: _ }
+            Event::Accepted { ts: _, order: _ }
         ));
 
         let events = order_book.process(Command::Sell {
             quantity: 5,
-            price: 3,
+            price: dec!(3),
         });
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events.first().unwrap(),
             Event::Filled {
                 ts: _,
-                price: _,
-                quantity: _,
-                orders: _
+                order: _,
+                counterpart: _,
             }
         ));
 
         let events = order_book.process(Command::Sell {
             quantity: 5,
-            price: 3,
+            price: dec!(3),
         });
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events.first().unwrap(),
             Event::Filled {
                 ts: _,
-                price: _,
-                quantity: _,
-                orders: _
+                order: _,
+                counterpart: _,
             }
         ));
 
