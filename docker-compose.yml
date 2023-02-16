@@ -10,7 +10,7 @@ services:
     environment:
       DATABASE_URL: postgres://main:main@postgres/main
       DATABASE_CONNECTION_POOL_SIZE: 5
-      RUST_LOG: info
+      RUST_LOG: orderbook_api_rs=debug
 
   postgres:
     image: postgres:15
