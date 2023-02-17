@@ -244,6 +244,10 @@ impl OrderBook {
         source_book: &mut BTreeSet<Rc<Order>>,
         source_index: &mut HashMap<Uuid, Rc<Order>>,
     ) {
+        events.push(Event::Accepted {
+            ts,
+            order: order.clone(),
+        });
         match counterpart_book.pop_first() {
             Some(counterpart) if order.price <= counterpart.price => {
                 match order.quantity.cmp(&counterpart.quantity) {
@@ -267,6 +271,11 @@ impl OrderBook {
                     Ordering::Greater => {
                         counterpart_book.remove(&order);
                         counterpart_index.remove(&order.id);
+                        events.push(Event::Filled {
+                            ts,
+                            order: order.clone(),
+                            counterpart: counterpart.as_ref().clone(),
+                        });
                         let new_source_order = Order {
                             order_type: order.order_type,
                             id: order.id,
@@ -292,10 +301,6 @@ impl OrderBook {
                 }
             }
             _ => {
-                events.push(Event::Accepted {
-                    ts,
-                    order: order.clone(),
-                });
                 let rc = Rc::new(order);
                 source_book.insert(rc.clone());
                 source_index.insert(rc.id, rc);
@@ -364,8 +369,19 @@ mod tests {
 
     use super::*;
 
+    // fn print_order_book(order_book: &OrderBook) {
+    //     println!();
+    //     for (i, buy) in order_book.buy_book.iter().enumerate() {
+    //         println!("{i} - BUY) {:?}", buy);
+    //     }
+    //     for (i, sell) in order_book.sell_book.iter().enumerate() {
+    //         println!("{i} - SELL) {:?}", sell);
+    //     }
+    //     println!();
+    // }
+
     #[test]
-    fn test_order_compare_on_same_price() {
+    fn test_order_on_same_price_should_be_ordered_by_earliest() {
         let ts = Utc::now();
         {
             let order1 = Order::buy(ts, 10, dec!(1));
@@ -380,57 +396,184 @@ mod tests {
     }
 
     #[test]
-    fn test_order_book_basic() {
+    fn test_insert_buy() {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Buy {
-            quantity: 10,
-            price: dec!(3),
+            quantity: 5,
+            price: dec!(2),
         });
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events.first().unwrap(),
-            Event::Accepted { ts: _, order: _ }
-        ));
+        let [
+            Event::Accepted {
+                ts: _,
+                order: Order {
+                    order_type: OrderType::Buy,
+                    id: _,
+                    ts: _,
+                    quantity: 5, price
+                }
+            }] = &events[..] else {
+            panic!("Wrong event type, events={:?}", events);
+        };
+        assert_eq!(price, &dec!(2));
+        assert_eq!(order_book.buy_book.len(), 1);
+        assert!(order_book.sell_book.is_empty());
+    }
 
+    #[test]
+    fn test_insert_sell() {
+        let mut order_book = OrderBook::new("test");
+        let events = order_book.process(Command::Sell {
+            quantity: 5,
+            price: dec!(2),
+        });
+        let [
+            Event::Accepted {
+                ts: _,
+                order: Order {
+                    order_type: OrderType::Sell,
+                    id: _,
+                    ts: _,
+                    quantity: 5, price
+                }
+            }] = &events[..] else {
+            panic!("Wrong event type, events={:?}", events);
+        };
+        assert_eq!(price, &dec!(2));
+        assert_eq!(order_book.sell_book.len(), 1);
+        assert!(order_book.buy_book.is_empty());
+    }
+
+    #[test]
+    fn test_reject_cancel_of_non_existing_order() {
+        let mut order_book = OrderBook::new("test");
+        let events = order_book.process(Command::Cancel { id: Uuid::new_v4() });
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events.first().unwrap(), Event::Rejected { .. }));
+    }
+
+    #[test]
+    fn test_cancel_order() {
+        let mut order_book = OrderBook::new("test");
+        let events = order_book.process(Command::Buy {
+            quantity: 5,
+            price: dec!(2),
+        });
+        let [
+            Event::Accepted {
+                ts: _,
+                order: Order {
+                    order_type: OrderType::Buy,
+                    id,
+                    ts:_,
+                    quantity:_,
+                    price:_
+                }
+            }] = &events[..] else {
+            panic!("Wrong event type, events={:?}", events);
+        };
+        let events = order_book.process(Command::Cancel { id: id.clone() });
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events.first().unwrap(), Event::Canceled { .. }));
+        assert!(order_book.buy_book.is_empty());
+    }
+
+    #[test]
+    fn test_update_order() {
+        let mut order_book = OrderBook::new("test");
+        let events = order_book.process(Command::Buy {
+            quantity: 5,
+            price: dec!(2),
+        });
+        let [Event::Accepted { ts:_, order: first_order }] = &events[..] else {
+            panic!("Wrong event type, events={:?}", events);
+        };
+        let events = order_book.process(Command::Update {
+            id: first_order.id,
+            new_quantity: 10,
+            new_price: dec!(5.5),
+        });
+        let [Event::Canceled { ts: _, order: first_order }, Event::Accepted { ts:_, order: updated_order }] = &events[..] else {
+            panic!("Wrong events={:?}", events);
+        };
+        assert_ne!(first_order.id, updated_order.id);
+        assert_eq!(updated_order.quantity, 10);
+        assert_eq!(updated_order.price, dec!(5.5));
+        assert_eq!(order_book.buy_book.len(), 1);
+    }
+
+    #[test]
+    fn test_fill_buy_order_leaving_leftovers() {
+        let mut order_book = OrderBook::new("test");
+        let events = order_book.process(Command::Buy {
+            quantity: 5,
+            price: dec!(2),
+        });
+        let [Event::Accepted { ts: _, order: buy_order}] = &events[..] else {
+            panic!("Wrong events={:?}", events);
+        };
+        assert_eq!(buy_order.order_type, OrderType::Buy);
+        let events = order_book.process(Command::Sell {
+            quantity: 10,
+            price: dec!(2),
+        });
+        let [
+            Event::Accepted {
+                ts:_,
+                order: sell_order
+            },
+            Event::Filled {
+                ts:_,
+                order: filled_order,
+                counterpart
+            },
+            Event::Accepted {
+                ts:_,
+                order: updated_sell_order
+            },
+        ] = &events[..] else {
+            panic!("Wrong events={:?}", events);
+        };
+        assert_eq!(filled_order.id, sell_order.id);
+        assert_eq!(updated_sell_order.id, sell_order.id);
+        assert_eq!(buy_order.id, counterpart.id);
+        assert_eq!(order_book.sell_book.len(), 1);
+    }
+
+    #[test]
+    fn test_fill_sell_order_leaving_leftovers() {
+        let mut order_book = OrderBook::new("test");
+        let events = order_book.process(Command::Sell {
+            quantity: 5,
+            price: dec!(2),
+        });
+        let [Event::Accepted { ts: _, order: buy_order}] = &events[..] else {
+            panic!("Wrong events={:?}", events);
+        };
+        assert_eq!(buy_order.order_type, OrderType::Sell);
         let events = order_book.process(Command::Buy {
             quantity: 10,
-            price: dec!(3),
+            price: dec!(2),
         });
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events.first().unwrap(),
-            Event::Accepted { ts: _, order: _ }
-        ));
-
-        let events = order_book.process(Command::Sell {
-            quantity: 5,
-            price: dec!(3),
-        });
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events.first().unwrap(),
+        let [
+            Event::Accepted {
+                ts:_,
+                order: sell_order
+            },
             Event::Filled {
-                ts: _,
-                order: _,
-                counterpart: _,
-            }
-        ));
-
-        let events = order_book.process(Command::Sell {
-            quantity: 5,
-            price: dec!(3),
-        });
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events.first().unwrap(),
-            Event::Filled {
-                ts: _,
-                order: _,
-                counterpart: _,
-            }
-        ));
-
-        assert_eq!(order_book.sell_book.len(), 0);
+                ts:_,
+                order: filled_order,
+                counterpart
+            },
+            Event::Accepted {
+                ts:_,
+                order: updated_sell_order
+            },
+        ] = &events[..] else {
+            panic!("Wrong events={:?}", events);
+        };
+        assert_eq!(filled_order.id, sell_order.id);
+        assert_eq!(updated_sell_order.id, sell_order.id);
+        assert_eq!(buy_order.id, counterpart.id);
         assert_eq!(order_book.buy_book.len(), 1);
     }
 }
