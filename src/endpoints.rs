@@ -1,5 +1,4 @@
 use crate::{
-    database,
     order_book::{Event, OrderBookState},
     AppContext, Error, Result,
 };
@@ -8,8 +7,8 @@ use axum::{
     debug_handler, extract::Path, http::StatusCode, response::IntoResponse, response::Response,
     routing::get, routing::patch, routing::post, Extension, Json, Router,
 };
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -43,21 +42,16 @@ impl IntoResponse for Error {
                 );
                 return t.into_response();
             }
-            Self::Database(ref e) => {
-                tracing::error!("Database error: {:?}", e);
-            }
             Self::Anyhow(ref e) => {
                 tracing::error!("Generic error: {:?}", e);
             }
-
-            _ => (),
         }
         (status_code(&self), self.to_string()).into_response()
     }
 }
 
-async fn health_check(Extension(app_context): Extension<AppContext>) -> Result<Json<String>> {
-    database::run_health_check(&app_context.db).await?;
+async fn health_check(Extension(_app_context): Extension<AppContext>) -> Result<Json<String>> {
+    // database::run_health_check(&app_context.db).await?;
     Ok(Json("OK".to_string()))
 }
 
@@ -97,7 +91,7 @@ struct EventsResponse {
 #[derive(Deserialize)]
 struct OrderRequest {
     quantity: u32,
-    price: Decimal,
+    price: BigDecimal,
 }
 
 #[debug_handler()]

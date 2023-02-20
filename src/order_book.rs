@@ -4,8 +4,8 @@ use std::{
     rc::Rc,
 };
 
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -13,11 +13,11 @@ use uuid::Uuid;
 pub enum Command {
     Buy {
         quantity: u32,
-        price: Decimal,
+        price: BigDecimal,
     },
     Sell {
         quantity: u32,
-        price: Decimal,
+        price: BigDecimal,
     },
     Cancel {
         id: Uuid,
@@ -25,7 +25,7 @@ pub enum Command {
     Update {
         id: Uuid,
         new_quantity: u32,
-        new_price: Decimal,
+        new_price: BigDecimal,
     },
     GetState,
 }
@@ -66,7 +66,7 @@ pub struct Order {
     pub id: Uuid,
     pub ts: DateTime<Utc>,
     pub quantity: u32,
-    pub price: Decimal,
+    pub price: BigDecimal,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize, Deserialize)]
@@ -95,7 +95,7 @@ impl OrderBookState {
 }
 
 impl Order {
-    pub fn sell(ts: DateTime<Utc>, quantity: u32, price: Decimal) -> Self {
+    pub fn sell(ts: DateTime<Utc>, quantity: u32, price: BigDecimal) -> Self {
         Self {
             id: Uuid::new_v4(),
             order_type: OrderType::Sell,
@@ -104,7 +104,7 @@ impl Order {
             price,
         }
     }
-    pub fn buy(ts: DateTime<Utc>, quantity: u32, price: Decimal) -> Self {
+    pub fn buy(ts: DateTime<Utc>, quantity: u32, price: BigDecimal) -> Self {
         Self {
             id: Uuid::new_v4(),
             order_type: OrderType::Buy,
@@ -256,7 +256,7 @@ impl OrderBook {
                             order_type: counterpart.order_type,
                             id: counterpart.id,
                             ts: counterpart.ts,
-                            price: counterpart.price,
+                            price: counterpart.price.clone(),
                             quantity: counterpart.quantity - order.quantity,
                         };
                         let rc = Rc::new(new_counterpart);
@@ -337,7 +337,7 @@ impl OrderBook {
         ts: DateTime<Utc>,
         id: Uuid,
         new_quantity: u32,
-        new_price: Decimal,
+        new_price: BigDecimal,
     ) -> Vec<Event> {
         match (self.sell_index.get(&id), self.buy_index.get(&id)) {
             (Some(_), None) => {
@@ -364,8 +364,9 @@ impl OrderBook {
 #[cfg(test)]
 mod tests {
 
+    use std::str::FromStr;
+
     use chrono::Duration;
-    use rust_decimal_macros::dec;
 
     use super::*;
 
@@ -384,13 +385,13 @@ mod tests {
     fn test_order_on_same_price_should_be_ordered_by_earliest() {
         let ts = Utc::now();
         {
-            let order1 = Order::buy(ts, 10, dec!(1));
-            let order2 = Order::buy(ts + Duration::milliseconds(1), 10, dec!(1));
+            let order1 = Order::buy(ts, 10, 1.into());
+            let order2 = Order::buy(ts + Duration::milliseconds(1), 10, 1.into());
             assert_eq!(order1.cmp(&order2), Ordering::Less);
         }
         {
-            let order1 = Order::sell(ts, 10, dec!(1));
-            let order2 = Order::sell(ts + Duration::milliseconds(1), 10, dec!(1));
+            let order1 = Order::sell(ts, 10, 1.into());
+            let order2 = Order::sell(ts + Duration::milliseconds(1), 10, 1.into());
             assert_eq!(order1.cmp(&order2), Ordering::Less);
         }
     }
@@ -400,7 +401,7 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Buy {
             quantity: 5,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [
             Event::Accepted {
@@ -414,7 +415,7 @@ mod tests {
             }] = &events[..] else {
             panic!("Wrong event type, events={:?}", events);
         };
-        assert_eq!(price, &dec!(2));
+        assert_eq!(price, &2.into());
         assert_eq!(order_book.buy_book.len(), 1);
         assert!(order_book.sell_book.is_empty());
     }
@@ -424,7 +425,7 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Sell {
             quantity: 5,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [
             Event::Accepted {
@@ -438,7 +439,7 @@ mod tests {
             }] = &events[..] else {
             panic!("Wrong event type, events={:?}", events);
         };
-        assert_eq!(price, &dec!(2));
+        assert_eq!(price, &2.into());
         assert_eq!(order_book.sell_book.len(), 1);
         assert!(order_book.buy_book.is_empty());
     }
@@ -456,7 +457,7 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Buy {
             quantity: 5,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [
             Event::Accepted {
@@ -482,7 +483,7 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Buy {
             quantity: 5,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [Event::Accepted { ts:_, order: first_order }] = &events[..] else {
             panic!("Wrong event type, events={:?}", events);
@@ -490,14 +491,14 @@ mod tests {
         let events = order_book.process(Command::Update {
             id: first_order.id,
             new_quantity: 10,
-            new_price: dec!(5.5),
+            new_price: BigDecimal::from_str("5.5").unwrap(),
         });
         let [Event::Canceled { ts: _, order: first_order }, Event::Accepted { ts:_, order: updated_order }] = &events[..] else {
             panic!("Wrong events={:?}", events);
         };
         assert_ne!(first_order.id, updated_order.id);
         assert_eq!(updated_order.quantity, 10);
-        assert_eq!(updated_order.price, dec!(5.5));
+        assert_eq!(updated_order.price, BigDecimal::from_str("5.5").unwrap());
         assert_eq!(order_book.buy_book.len(), 1);
     }
 
@@ -506,7 +507,7 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Buy {
             quantity: 5,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [Event::Accepted { ts: _, order: buy_order}] = &events[..] else {
             panic!("Wrong events={:?}", events);
@@ -514,7 +515,7 @@ mod tests {
         assert_eq!(buy_order.order_type, OrderType::Buy);
         let events = order_book.process(Command::Sell {
             quantity: 10,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [
             Event::Accepted {
@@ -544,7 +545,7 @@ mod tests {
         let mut order_book = OrderBook::new("test");
         let events = order_book.process(Command::Sell {
             quantity: 5,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [Event::Accepted { ts: _, order: buy_order}] = &events[..] else {
             panic!("Wrong events={:?}", events);
@@ -552,7 +553,7 @@ mod tests {
         assert_eq!(buy_order.order_type, OrderType::Sell);
         let events = order_book.process(Command::Buy {
             quantity: 10,
-            price: dec!(2),
+            price: 2.into(),
         });
         let [
             Event::Accepted {

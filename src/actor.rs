@@ -1,4 +1,5 @@
-use rust_decimal::Decimal;
+use bigdecimal::BigDecimal;
+use scylla::Session;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -43,11 +44,11 @@ impl Client {
         }
     }
 
-    pub async fn buy(&self, quantity: u32, price: Decimal) -> Result<Vec<Event>> {
+    pub async fn buy(&self, quantity: u32, price: BigDecimal) -> Result<Vec<Event>> {
         self.call(Command::Buy { quantity, price }).await
     }
 
-    pub async fn sell(&self, quantity: u32, price: Decimal) -> Result<Vec<Event>> {
+    pub async fn sell(&self, quantity: u32, price: BigDecimal) -> Result<Vec<Event>> {
         self.call(Command::Sell { quantity, price }).await
     }
 
@@ -55,7 +56,12 @@ impl Client {
         self.call(Command::Cancel { id: order }).await
     }
 
-    pub async fn update(&self, order: Uuid, quantity: u32, price: Decimal) -> Result<Vec<Event>> {
+    pub async fn update(
+        &self,
+        order: Uuid,
+        quantity: u32,
+        price: BigDecimal,
+    ) -> Result<Vec<Event>> {
         self.call(Command::Update {
             id: order,
             new_quantity: quantity,
@@ -80,15 +86,11 @@ impl Request {
 pub struct Actor {
     receiver: mpsc::Receiver<Request>,
     order_book: OrderBook,
-    db: sqlx::Pool<sqlx::Postgres>,
+    db: Session,
 }
 
 impl Actor {
-    fn new(
-        db: sqlx::Pool<sqlx::Postgres>,
-        receiver: mpsc::Receiver<Request>,
-        ticker: &str,
-    ) -> Self {
+    fn new(db: Session, receiver: mpsc::Receiver<Request>, ticker: &str) -> Self {
         Self {
             db,
             receiver,
@@ -100,7 +102,7 @@ impl Actor {
         tracing::info!("Waiting for commands");
         while let Some(request) = self.receiver.recv().await {
             let events = self.order_book.process(request.command);
-            match database::save_events(&self.db, &events).await {
+            match database::save_events(&self.order_book.ticker, &self.db, &events).await {
                 Ok(_) => match request.callback.send(events) {
                     Ok(_) => (),
                     Err(events) => {
@@ -117,11 +119,7 @@ impl Actor {
     }
 }
 
-pub fn build(
-    db: sqlx::Pool<sqlx::Postgres>,
-    ticker: &str,
-    channel_buffer: usize,
-) -> (Client, Actor) {
+pub fn build(db: Session, ticker: &str, channel_buffer: usize) -> (Client, Actor) {
     let (sender, receiver) = mpsc::channel(channel_buffer);
     let client = Client::new(sender);
     let server = Actor::new(db, receiver, ticker);

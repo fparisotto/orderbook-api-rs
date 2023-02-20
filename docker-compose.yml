@@ -6,24 +6,42 @@ services:
     ports:
       - 3000:3000
     depends_on:
-      - postgres
+      - scylladb-1
+      - scylladb-2
+      - scylladb-3
+    command: ["./wait-for-it.sh", "scylladb-1:9041", "--", "./orderbook-api-rs"]
     environment:
-      DATABASE_URL: postgres://main:main@postgres/main
-      DATABASE_CONNECTION_POOL_SIZE: 5
+      DATABASE_URL: scylladb-1:9041,scylladb-2:9042,scylladb-3:9043
       RUST_LOG: orderbook_api_rs=debug
 
-  postgres:
-    image: postgres:15
+  scylladb-1:
+    image: scylladb/scylla:5.1
     ports:
-      - 5432:5432
-    environment:
-      POSTGRES_USER: main
-      POSTGRES_PASSWORD: main
-      POSTGRES_DB: main
+      - 9041:9042
     restart: unless-stopped
-    command: -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+    command: --seeds=scylladb-1,scylladb-2,scylladb-3 --cpuset 0 --smp 1 --memory 2048M
     volumes:
-      - postgres-data:/var/lib/postgresql
+      - scylladb-1-data:/var/lib/scylla
+
+  scylladb-2:
+    image: scylladb/scylla:5.1
+    ports:
+      - 9042:9042
+    restart: unless-stopped
+    command: --seeds=scylladb-1,scylladb-2,scylladb-3 --cpuset 1 --smp 1 --memory 2048M
+    volumes:
+      - scylladb-2-data:/var/lib/scylla
+
+  scylladb-3:
+    image: scylladb/scylla:5.1
+    ports:
+      - 9043:9042
+    restart: unless-stopped
+    command: --seeds=scylladb-1,scylladb-2,scylladb-3 --cpuset 2 --smp 1 --memory 2048M
+    volumes:
+      - scylladb-3-data:/var/lib/scylla
 
 volumes:
-  postgres-data:
+  scylladb-1-data:
+  scylladb-2-data:
+  scylladb-3-data:

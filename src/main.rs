@@ -22,10 +22,9 @@ async fn main() -> anyhow::Result<()> {
     let db = database::connect(&config).await?;
     database::run_migrations(&db).await?;
 
-    let (client, actor) = actor::build(db.clone(), "vibranium", 8);
+    let (client, actor) = actor::build(db, "vibranium", 8);
 
     let app_state = AppContext {
-        db,
         config: Arc::new(config),
         actor_client: client,
     };
