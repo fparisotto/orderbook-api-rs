@@ -7,28 +7,22 @@ use std::sync::Arc;
 
 use actor::Client;
 use chrono::{DateTime, Utc};
-use sqlx::{Pool, Postgres};
 
 #[derive(Clone)]
 pub struct AppContext {
-    pub db: Pool<Postgres>,
+    pub db: sqlx::Pool<sqlx::Sqlite>,
     pub config: Arc<Config>,
     pub actor_client: Client,
 }
 
 pub struct Config {
-    pub database_url: String,
-    pub database_connection_pool_size: u8,
+    pub database_file: String,
 }
 
 impl Config {
     pub fn parse() -> anyhow::Result<Self> {
-        let database_url = std::env::var("DATABASE_URL")?;
-        let pool_size: u8 = std::env::var("DATABASE_CONNECTION_POOL_SIZE")?.parse()?;
-        Ok(Config {
-            database_url,
-            database_connection_pool_size: pool_size,
-        })
+        let database_file = std::env::var("DATABASE_FILE")?;
+        Ok(Config { database_file })
     }
 }
 

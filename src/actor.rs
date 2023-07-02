@@ -80,15 +80,11 @@ impl Request {
 pub struct Actor {
     receiver: mpsc::Receiver<Request>,
     order_book: OrderBook,
-    db: sqlx::Pool<sqlx::Postgres>,
+    db: sqlx::Pool<sqlx::Sqlite>,
 }
 
 impl Actor {
-    fn new(
-        db: sqlx::Pool<sqlx::Postgres>,
-        receiver: mpsc::Receiver<Request>,
-        ticker: &str,
-    ) -> Self {
+    fn new(db: sqlx::Pool<sqlx::Sqlite>, receiver: mpsc::Receiver<Request>, ticker: &str) -> Self {
         Self {
             db,
             receiver,
@@ -117,11 +113,7 @@ impl Actor {
     }
 }
 
-pub fn build(
-    db: sqlx::Pool<sqlx::Postgres>,
-    ticker: &str,
-    channel_buffer: usize,
-) -> (Client, Actor) {
+pub fn build(db: sqlx::Pool<sqlx::Sqlite>, ticker: &str, channel_buffer: usize) -> (Client, Actor) {
     let (sender, receiver) = mpsc::channel(channel_buffer);
     let client = Client::new(sender);
     let server = Actor::new(db, receiver, ticker);

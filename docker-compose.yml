@@ -11,19 +11,3 @@ services:
       DATABASE_URL: postgres://main:main@postgres/main
       DATABASE_CONNECTION_POOL_SIZE: 5
       RUST_LOG: orderbook_api_rs=debug
-
-  postgres:
-    image: postgres:15
-    ports:
-      - 5432:5432
-    environment:
-      POSTGRES_USER: main
-      POSTGRES_PASSWORD: main
-      POSTGRES_DB: main
-    restart: unless-stopped
-    command: -c fsync=off -c synchronous_commit=off -c full_page_writes=off
-    volumes:
-      - postgres-data:/var/lib/postgresql
-
-volumes:
-  postgres-data:
